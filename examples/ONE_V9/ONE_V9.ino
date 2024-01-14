@@ -1,4 +1,5 @@
 /*
+Original repo Notes:
 Important: This code is only for the DIY PRO / AirGradient ONE PCB Version 9 with the ESP-C3 MCU.
 
 It is a high quality sensor showing PM2.5, CO2, TVOC, NOx, Temperature and Humidity on a small display and LEDbar and can send data over Wifi.
@@ -29,6 +30,22 @@ CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
 
 */
 
+/*
+Notes by JHewitt:
+
+Install the following libraries:
+
+ArduinoJson by Benoit Blanchon 7.0.1
+
+Use board type Lolin C3 Mini.
+I tested with partition "4MB with spiffs 1.2MB APP/1.5MB spiffs", 160MHz CPU Wifi, 80MHz flash
+
+My changes are covered under the same license as noted above (CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License)
+Please see `git diff` for a log of my changes.
+
+Thanks to AirGradient.com for the hardware and original source code
+
+*/
 #include "PMS.h"
 #include <HardwareSerial.h>
 #include <Wire.h>
@@ -36,12 +53,12 @@ CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
 #include <HTTPClient.h>
 #include <WiFiManager.h>
 #include <Adafruit_NeoPixel.h>
-#include <EEPROM.h>
 #include "SHTSensor.h"
 #include <SensirionI2CSgp41.h>
 #include <NOxGasIndexAlgorithm.h>
 #include <VOCGasIndexAlgorithm.h>
 #include <U8g2lib.h>
+#include <ArduinoJson.h>
 
 #define DEBUG true
 
@@ -87,7 +104,7 @@ boolean useRGBledBar = true;
 // set to true if you want to connect to wifi. You have 60 seconds to connect. Then it will go into an offline mode.
 boolean connectWIFI = true;
 
-int loopCount = 0;
+unsigned long loopCount = 0;
 
 unsigned long currentMillis = 0;
 
@@ -124,6 +141,8 @@ int currentState;
 unsigned long pressedTime = 0;
 unsigned long releasedTime = 0;
 
+boolean disable_oled = false; //Set by API server.
+
 void setup() {
   if (DEBUG) {
     Serial.begin(115200);
@@ -153,7 +172,6 @@ void setup() {
 
   sensor_S8 = new S8_UART(Serial1);
 
-  EEPROM.begin(512);
   delay(500);
 
   // push button
@@ -161,12 +179,12 @@ void setup() {
 
    if (connectWIFI) connectToWifi();
     if (WiFi.status() == WL_CONNECTED) {
-      sendPing();
       Serial.println(F("WiFi connected!"));
       Serial.println("IP address: ");
       Serial.println(WiFi.localIP());
     }
   updateOLED2("Warming Up", "Serial Number:", String(getNormalizedMac()));
+  ledTest();
 }
 
 void loop() {
@@ -209,11 +227,12 @@ void updateTVOC() {
     if (error) {
       TVOC = -1;
       NOX = -1;
-      Serial.println(String(TVOC));
+      debugln("Failed to get TVOC");
     } else {
       TVOC = voc_algorithm.process(srawVoc);
       NOX = nox_algorithm.process(srawNox);
-      Serial.println(String(TVOC));
+      debug("Got TVOC value: ");
+      debugln(TVOC);
     }
 
   }
@@ -235,11 +254,14 @@ void updatePm() {
       pm25 = data1.PM_AE_UG_2_5;
       pm10 = data1.PM_AE_UG_10_0;
 //      pm03PCount = data1.PM_RAW_0_3;
+    debug("Got PM value: ");
+    debugln(pm25);
     } else {
       pm01 = -1;
       pm25 = -1;
       pm10 = -1;
 //      pm03PCount = -1;
+    debugln("Failed to get PM");
     }
   }
 }
@@ -260,6 +282,10 @@ void updateTempHum() {
 }
 
 void updateOLED() {
+  if (disable_oled){
+    u8g2.clear();
+    return;
+  }
   if (currentMillis - previousOled >= oledInterval) {
     previousOled += oledInterval;
 
@@ -278,12 +304,6 @@ void updateOLED() {
     //updateOLED2(ln1, ln2, ln3);
     updateOLED3();
   }
-}
-
-void sendPing() {
-  String payload = "{\"wifi\":" + String(WiFi.RSSI()) +
-    ", \"boot\":" + loopCount +
-    "}";
 }
 
 void updateOLED2(String ln1, String ln2, String ln3) {
@@ -410,7 +430,18 @@ void sendToServer() {
       String response = http.getString();
       Serial.println(httpCode);
       Serial.println(response);
+      JsonDocument obj;
+      deserializeJson(obj, response);
+      obj["test"] = 1;
+      serializeJson(obj, Serial);
       http.end();
+      for (int i = 0; i < 11; i++) {
+        //Iterate LEDs
+        String led_id = "led" + String(i);
+        pixels.setPixelColor(i, pixels.Color((int)obj[led_id][0], (int)obj[led_id][1], (int)obj[led_id][2]));
+      }
+      pixels.show();
+      disable_oled = !(bool)obj["oled"];
       resetWatchdog();
       loopCount++;
     } else {
@@ -430,7 +461,7 @@ void countdown(int from) {
 }
 
 void resetWatchdog() {
-  Serial.println("Watchdog reset");
+  debugln("Watchdog kick");
   digitalWrite(2, HIGH);
   delay(20);
   digitalWrite(2, LOW);

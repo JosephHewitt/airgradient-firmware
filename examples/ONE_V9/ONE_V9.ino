@@ -30,29 +30,17 @@ CC BY-SA 4.0 Attribution-ShareAlike 4.0 International License
 */
 
 #include "PMS.h"
-
 #include <HardwareSerial.h>
-
 #include <Wire.h>
-
 #include "s8_uart.h"
-
 #include <HTTPClient.h>
-
 #include <WiFiManager.h>
-
 #include <Adafruit_NeoPixel.h>
-
 #include <EEPROM.h>
-
 #include "SHTSensor.h"
-
 #include <SensirionI2CSgp41.h>
-
 #include <NOxGasIndexAlgorithm.h>
-
 #include <VOCGasIndexAlgorithm.h>
-
 #include <U8g2lib.h>
 
 #define DEBUG true
@@ -85,13 +73,10 @@ byte value;
 // Display bottom right
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
-String APIROOT = "http://hw.airgradient.com/";
+String APIROOT = "http://192.168.2.21:1880/agdata/";
 
 // set to true to switch from Celcius to Fahrenheit
 boolean inF = false;
-
-// PM2.5 in US AQI (default ug/m3)
-boolean inUSAQI = false;
 
 // Display Position
 boolean displayTop = true;
@@ -109,7 +94,7 @@ unsigned long currentMillis = 0;
 const int oledInterval = 5000;
 unsigned long previousOled = 0;
 
-const int sendToServerInterval = 10000;
+const int sendToServerInterval = 5000;
 unsigned long previoussendToServer = 0;
 
 const int tvocInterval = 1000;
@@ -173,31 +158,6 @@ void setup() {
 
   // push button
   pinMode(9, INPUT_PULLUP);
-
-  buttonConfig = String(EEPROM.read(addr)).toInt();
-  if (buttonConfig > 7) buttonConfig = 0;
-  delay(400);
-  setConfig();
-  Serial.println("buttonConfig: " + String(buttonConfig));
-
-  updateOLED2("Press Button", "for LED test &", "offline mode");
-  delay(2000);
-  currentState = digitalRead(9);
-  if (currentState == LOW) {
-    ledTest();
-    return;
-  }
-
-  updateOLED2("Press Button", "Now for", "Config Menu");
-  delay(2000);
-  currentState = digitalRead(9);
-  if (currentState == LOW) {
-    updateOLED2("Entering", "Config Menu", "");
-    delay(3000);
-    lastState = HIGH;
-    setConfig();
-    inConf();
-  }
 
    if (connectWIFI) connectToWifi();
     if (WiFi.status() == WL_CONNECTED) {
@@ -306,11 +266,7 @@ void updateOLED() {
     String ln3;
     String ln1;
 
-    if (inUSAQI) {
-      ln1 = "AQI:" + String(PM_TO_AQI_US(pm25)) + " CO2:" + String(Co2);
-    } else {
-      ln1 = "PM:" + String(pm25) + " CO2:" + String(Co2);
-    }
+    ln1 = "PM:" + String(pm25) + " CO2:" + String(Co2);
 
     String ln2 = "TVOC:" + String(TVOC) + " NOX:" + String(NOX);
 
@@ -321,99 +277,6 @@ void updateOLED() {
     }
     //updateOLED2(ln1, ln2, ln3);
     updateOLED3();
-    setRGBledCO2color(Co2);
-  }
-}
-
-void inConf() {
-  setConfig();
-  currentState = digitalRead(9);
-
-  if (currentState) {
-    Serial.println("currentState: high");
-  } else {
-    Serial.println("currentState: low");
-  }
-
-  if (lastState == HIGH && currentState == LOW) {
-    pressedTime = millis();
-  } else if (lastState == LOW && currentState == HIGH) {
-    releasedTime = millis();
-    long pressDuration = releasedTime - pressedTime;
-    if (pressDuration < 1000) {
-      buttonConfig = buttonConfig + 1;
-      if (buttonConfig > 7) buttonConfig = 0;
-    }
-  }
-
-  if (lastState == LOW && currentState == LOW) {
-    long passedDuration = millis() - pressedTime;
-    if (passedDuration > 4000) {
-      updateOLED2("Saved", "Release", "Button Now");
-      delay(1000);
-      updateOLED2("Rebooting", "in", "5 seconds");
-      delay(5000);
-      EEPROM.write(addr, char(buttonConfig));
-      EEPROM.commit();
-      delay(1000);
-      ESP.restart();
-    }
-
-  }
-  lastState = currentState;
-  delay(100);
-  inConf();
-}
-
-void setConfig() {
-  Serial.println("in setConfig");
-  if (buttonConfig == 0) {
-    u8g2.setDisplayRotation(U8G2_R0);
-    updateOLED2("T:C, PM:ug/m3", "LED Bar: on", "Long Press Saves");
-    inF = false;
-    inUSAQI = false;
-    useRGBledBar = true;
-  } else if (buttonConfig == 1) {
-    u8g2.setDisplayRotation(U8G2_R0);
-    updateOLED2("T:C, PM:US AQI", "LED Bar: on", "Long Press Saves");
-    inF = false;
-    inUSAQI = true;
-    useRGBledBar = true;
-  } else if (buttonConfig == 2) {
-    u8g2.setDisplayRotation(U8G2_R0);
-    updateOLED2("T:F PM:ug/m3", "LED Bar: on", "Long Press Saves");
-    inF = true;
-    inUSAQI = false;
-    useRGBledBar = true;
-  } else if (buttonConfig == 3) {
-    u8g2.setDisplayRotation(U8G2_R0);
-    updateOLED2("T:F PM:US AQI", "LED Bar: on", "Long Press Saves");
-    inF = true;
-    inUSAQI = true;
-    useRGBledBar = true;
-  } else  if (buttonConfig == 4) {
-    updateOLED2("T:C, PM:ug/m3", "LED Bar: off", "Long Press Saves");
-    inF = false;
-    inUSAQI = false;
-    useRGBledBar = false;
-  } else if (buttonConfig == 5) {
-    u8g2.setDisplayRotation(U8G2_R0);
-    updateOLED2("T:C, PM:US AQI", "LED Bar: off", "Long Press Saves");
-    inF = false;
-    inUSAQI = true;
-    useRGBledBar = false;
-  } else if (buttonConfig == 6) {
-    u8g2.setDisplayRotation(U8G2_R0);
-    updateOLED2("T:F PM:ug/m3", "LED Bar: off", "Long Press Saves");
-    inF = true;
-    inUSAQI = false;
-    useRGBledBar = false;
-  } else if (buttonConfig == 7) {
-    u8g2.setDisplayRotation(U8G2_R0);
-    updateOLED2("T:F PM:US AQI", "LED Bar: off", "Long Press Saves");
-    inF = true;
-    inUSAQI = true;
-    useRGBledBar = false;
   }
 }
 
@@ -489,25 +352,15 @@ void updateOLED3() {
     u8g2.drawStr(48, 27, "PM2.5");
     u8g2.setFont(u8g2_font_t0_22b_tf);
 
-    if (inUSAQI) {
-      if (pm25 >= 0) {
-        sprintf(buf, "%d", PM_TO_AQI_US(pm25));
-      } else {
-        sprintf(buf, "%s", "-");
-      }
-      u8g2.drawStr(48, 48, buf);
-      u8g2.setFont(u8g2_font_t0_12_tf);
-      u8g2.drawUTF8(48, 61, "AQI");
+    
+    if (pm25 >= 0) {
+      sprintf(buf, "%d", pm25);
     } else {
-      if (pm25 >= 0) {
-        sprintf(buf, "%d", pm25);
-      } else {
-        sprintf(buf, "%s", "-");
-      }
-      u8g2.drawStr(48, 48, buf);
-      u8g2.setFont(u8g2_font_t0_12_tf);
-      u8g2.drawUTF8(48, 61, "ug/m³");
+      sprintf(buf, "%s", "-");
     }
+    u8g2.drawStr(48, 48, buf);
+    u8g2.setFont(u8g2_font_t0_12_tf);
+    u8g2.drawUTF8(48, 61, "ug/m³");
 
     u8g2.drawLine(82, 15, 82, 64);
     u8g2.setFont(u8g2_font_t0_12_tf);
@@ -624,90 +477,6 @@ String getNormalizedMac() {
   return mac;
 }
 
-void setRGBledCO2color(int co2Value) {
-  if (co2Value >= 300 && co2Value < 800) setRGBledColor('g');
-  if (co2Value >= 800 && co2Value < 1000) setRGBledColor('y');
-  if (co2Value >= 1000 && co2Value < 1500) setRGBledColor('o');
-  if (co2Value >= 1500 && co2Value < 2000) setRGBledColor('r');
-  if (co2Value >= 2000 && co2Value < 3000) setRGBledColor('p');
-  if (co2Value >= 3000 && co2Value < 10000) setRGBledColor('z');
-}
-
-void setRGBledColor(char color) {
-  if (useRGBledBar) {
-    //pixels.clear();
-    switch (color) {
-    case 'g':
-      for (int i = 0; i < 11; i++) {
-        pixels.setPixelColor(i, pixels.Color(0, 255, 0));
-        delay(30);
-        pixels.show();
-      }
-      break;
-    case 'y':
-      for (int i = 0; i < 11; i++) {
-        pixels.setPixelColor(i, pixels.Color(255, 255, 0));
-        delay(30);
-        pixels.show();
-      }
-      break;
-    case 'o':
-      for (int i = 0; i < 11; i++) {
-        pixels.setPixelColor(i, pixels.Color(255, 128, 0));
-        delay(30);
-        pixels.show();
-      }
-      break;
-    case 'r':
-      for (int i = 0; i < 11; i++) {
-        pixels.setPixelColor(i, pixels.Color(255, 0, 0));
-        delay(30);
-        pixels.show();
-      }
-      break;
-    case 'b':
-      for (int i = 0; i < 11; i++) {
-        pixels.setPixelColor(i, pixels.Color(0, 0, 255));
-        delay(30);
-        pixels.show();
-      }
-      break;
-    case 'w':
-      for (int i = 0; i < 11; i++) {
-        pixels.setPixelColor(i, pixels.Color(255, 255, 255));
-        delay(30);
-        pixels.show();
-      }
-      break;
-    case 'p':
-      for (int i = 0; i < 11; i++) {
-        pixels.setPixelColor(i, pixels.Color(153, 0, 153));
-        delay(30);
-        pixels.show();
-      }
-      break;
-    case 'z':
-      for (int i = 0; i < 11; i++) {
-        pixels.setPixelColor(i, pixels.Color(102, 0, 0));
-        delay(30);
-        pixels.show();
-      }
-      break;
-    case 'n':
-      for (int i = 0; i < 11; i++) {
-        pixels.setPixelColor(i, pixels.Color(0, 0, 0));
-        delay(30);
-        pixels.show();
-      }
-      break;
-    default:
-      // if nothing else matches, do the default
-      // default is optional
-      break;
-    }
-  }
-}
-
 void ledTest() {
   updateOLED2("LED Test", "running", ".....");
   for (int i = 0; i < 11; i++) {
@@ -715,41 +484,29 @@ void ledTest() {
         delay(30);
         pixels.show();
       }
-  delay(500);
+  delay(200);
   for (int i = 0; i < 11; i++) {
         pixels.setPixelColor(i, pixels.Color(0, 255, 0));
         delay(30);
         pixels.show();
       }
-  delay(500);
+  delay(200);
   for (int i = 0; i < 11; i++) {
         pixels.setPixelColor(i, pixels.Color(0, 0, 255));
         delay(30);
         pixels.show();
       }
-  delay(500);
+  delay(200);
   for (int i = 0; i < 11; i++) {
         pixels.setPixelColor(i, pixels.Color(255, 255, 255));
         delay(30);
         pixels.show();
       }
-  delay(500);
+  delay(200);
   for (int i = 0; i < 11; i++) {
         pixels.setPixelColor(i, pixels.Color(0, 0, 0));
         delay(30);
         pixels.show();
       }
-  delay(500);
+  delay(200);
 }
-
-// Calculate PM2.5 US AQI
-int PM_TO_AQI_US(int pm02) {
-  if (pm02 <= 12.0) return ((50 - 0) / (12.0 - .0) * (pm02 - .0) + 0);
-  else if (pm02 <= 35.4) return ((100 - 50) / (35.4 - 12.0) * (pm02 - 12.0) + 50);
-  else if (pm02 <= 55.4) return ((150 - 100) / (55.4 - 35.4) * (pm02 - 35.4) + 100);
-  else if (pm02 <= 150.4) return ((200 - 150) / (150.4 - 55.4) * (pm02 - 55.4) + 150);
-  else if (pm02 <= 250.4) return ((300 - 200) / (250.4 - 150.4) * (pm02 - 150.4) + 200);
-  else if (pm02 <= 350.4) return ((400 - 300) / (350.4 - 250.4) * (pm02 - 250.4) + 300);
-  else if (pm02 <= 500.4) return ((500 - 400) / (500.4 - 350.4) * (pm02 - 350.4) + 400);
-  else return 500;
-};
